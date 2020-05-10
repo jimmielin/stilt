@@ -1,81 +1,59 @@
-# STILT Dockerfile
-# Ben Fasoli
+# STILT Dockerfile for Batch
+# Ben Fasoli, Haipeng Lin (modified for AWS Batch)
 #
-# Builds docker image for dependency free single-shot cli STILT runs by
+# Builds docker image for dependency free subsetted multi-batch processing cli STILT runs by
 # supplying run_stilt.r parameters as command args
 #
-#   docker build -t stilt .
+#   docker build -t stiltbatch .
 #
 # The following mounts are required on call to docker run:
 #
-#   METDIR=/path/to/met/directory
-#   OUTDIR=/path/to/out/directory
-#   --mount type=bind,source=$METDIR,destination=/app/met,readonly \
-#   --mount type=bind,source=$OUTDIR,destination=/app/out/by-id \
+#   --mount type=bind,source=/fsx/in,destination=/app/met,readonly \
+#   --mount type=bind,source=/fsx/out,destination=/app/out \
 #
 #
 # Example
 #
-# Fetch example met data for testing
-#   git clone https://github.com/uataq/stilt-tutorials /tmp/stilt-tutorials
-# Create host input/output paths
-#   METDIR=/tmp/stilt-tutorials/01-wbb/met
-#   OUTDIR=/tmp/stilt-out
-#   mkdir -p $METDIR $OUTDIR
+# Create host input/output paths -- input contains met/ and also receptor data
 #   docker run \
 #     --rm \
-#     --mount type=bind,source=$METDIR,destination=/app/met,readonly \
-#     --mount type=bind,source=$OUTDIR,destination=/app/out/by-id \
+#     --mount type=bind,source=/fsx/in,destination=/app/in,readonly \
+#     --mount type=bind,source=/fsx/out,destination=/app/out \
 #     stilt \
-#     r_run_time=2015-12-10T00:00:00Z \
-#     r_lati=40.5 \
-#     r_long=-112.0 \
-#     r_zagl=5 \
-#     met_loc=/app/met \
-#     met_file_format=%Y%m%d.%H \
-#     xmn=-112.3 \
-#     xmx=-111.52 \
-#     xres=0.01 \
-#     ymn=40.39 \
-#     ymx=40.95 \
-#     yres=0.01
+#     stilt_wd=/app \
+#     recep_file_loc=/app/in/HundredReceptors.RData \
+#     recep_idx_s=5 recep_idx_e=10 \
+#     met_dir=/app/in/met met_file_format=%Y%m%d_gfs0p25 \ 
+#     xmn=-74.8 xmx=-71 ymn=39.7 ymx=42.1 xres=0.01 yres=0.01 \
+#     ncores=2
 
-FROM debian:stretch-slim
+FROM centos:7
+ENV R_LIBS_USER /app/rlibs
+
+RUN yum -y install epel-release && yum -y install R
+
+RUN R --version
+
+RUN R -e "install.packages('devtools', repos='http://cran.us.r-project.org')"
+RUN R -e "install.packages('Rcpp', repos='http://cran.us.r-project.org')"
+RUN R -e "install.packages('raster', repos='http://cran.us.r-project.org')"
+RUN R -e "install.packages('dplyr', repos='http://cran.us.r-project.org')"
+RUN R -e "install.packages('parallel', repos='http://cran.us.r-project.org')"
+
+RUN yum -y install netcdf netcdf-devel
+RUN yum -y install libgfortran4
+
+RUN R -e "install.packages('ncdf4', repos='http://cran.us.r-project.org')"
+RUN R -e "install.packages('rslurm', repos='http://cran.us.r-project.org')"
 
 WORKDIR /app
 
 COPY . /app
 
 ENV TZ UTC
-ENV DEBIAN_FRONTEND noninteractive
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-                build-essential \
-                git \
-                libhdf5-serial-dev \
-                libnetcdf-dev \
-                libssl-dev \
-                locales \
-                netcdf-bin \
-                procps \
-                r-base \
-                r-base-dev \
-                unzip \
-                wget \
-        && locale-gen en_US.UTF-8 \
-        && update-locale \
-        && bash setup 3 \
-        && Rscript r/dependencies.r \
-        && apt-get remove --purge -y \
-                build-essential \
-                git \
-                locales \
-                wget \
-        && apt-get autoremove -y \
-        && rm -rf /var/lib/apt/lists/*
+VOLUME ["/app/in", "/app/out"]
 
-VOLUME ["/app/met", "/app/out"]
-
-ENTRYPOINT ["/app/r/stilt_cli.r", \
-                "met_loc=/app/met", \
-                "output_wd=/app/out"]
+ENTRYPOINT ["/app/r/stilt_cli_multi.r", \
+                "stilt_wd=/app/", \
+                "met_dir=/app/in/met"]
